@@ -1,0 +1,16 @@
+{
+  "version": "1.1.8",
+  "release_date": "2026-08-10",
+  "min_app_version": "1.0.0",
+  "changelog": "STAGING baseline — exact mirror of production 1.1.8 at time of staging setup",
+  "files": {
+    "logic": {
+      "sha256": "f95afd9b53c8a4402de3cc2542d3ef0f984993b22db4e02ccb291036166b3a96",
+      "download_url": "https://raw.githubusercontent.com/SecretSau/testsphere--logic-staging/main/logic.py"
+    },
+    "vision": {
+      "sha256": "978a05047e8c50be82d055f82d2810c0abdd36957a2ed2414d52b0fd5100927b",
+      "download_url": "https://raw.githubusercontent.com/SecretSau/testsphere--vision-staging/main/vision.py"
+    }
+  }
+}
