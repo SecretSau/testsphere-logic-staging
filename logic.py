@@ -147,6 +147,11 @@ class ElementFinder:
         # distinct from the modal-occlusion case where one candidate is
         # actually covered/unclickable.
         self._clicked_elements = []
+        # Grid/table row scoping — set by the `Row:` command, used by
+        # Text:/upload: to disambiguate repeated column labels (e.g. a
+        # "New Reading" input that exists once per row in a data table).
+        self._row_scope       = None   # the matched <tr> WebElement
+        self._row_scope_table = None   # that row's ancestor <table>, for column lookups
 
     # ── public helpers ────────────────────────────────────────────────────────
 
@@ -560,6 +565,125 @@ class ElementFinder:
                 pass
 
         return None
+
+    # ── Grid/table row scoping (Row: command) ───────────────────────────────
+    def find_table_row(self, identifier: str):
+        """Find a <tr> whose row-identifying cell (typically the first
+        column, e.g. Meter ID/Name) matches identifier. Returns the <tr>
+        WebElement, or None."""
+        ident_l = identifier.lower().strip()
+        try:
+            rows = self.driver.find_elements(By.XPATH, "//table//tr")
+        except Exception:
+            return None
+        for row in rows:
+            try:
+                if not row.is_displayed():
+                    continue
+                cells = row.find_elements(By.TAG_NAME, "td")
+                for cell in cells:
+                    txt = (cell.text or "").strip().lower()
+                    if txt and (txt == ident_l or ident_l in txt):
+                        return row
+            except Exception:
+                continue
+        return None
+
+    def find_table_column_index(self, header_text: str, table_el=None):
+        """Find the 0-based column index of a <th> matching header_text.
+        Scoped to table_el if given, else searches every table on the page.
+        Returns None if not found."""
+        ident_l = header_text.lower().strip()
+        try:
+            headers = (
+                table_el.find_elements(By.XPATH, ".//th")
+                if table_el is not None
+                else self.driver.find_elements(By.XPATH, "//table//th")
+            )
+        except Exception:
+            return None
+        for i, th in enumerate(headers):
+            try:
+                if not th.is_displayed():
+                    continue
+                txt = (th.text or "").strip().lower()
+                if txt == ident_l or ident_l in txt:
+                    return i
+            except Exception:
+                continue
+        return None
+
+    def set_row_scope(self, identifier: str) -> bool:
+        """Activate row scoping — subsequent Text:/upload: calls resolve
+        against this specific row instead of searching the whole page."""
+        row = self.find_table_row(identifier)
+        if row is None:
+            self._row_scope       = None
+            self._row_scope_table = None
+            return False
+        self._row_scope = row
+        try:
+            self._row_scope_table = row.find_element(By.XPATH, "./ancestor::table[1]")
+        except Exception:
+            self._row_scope_table = None
+        self.scroll_to(row)
+        return True
+
+    def clear_row_scope(self):
+        self._row_scope       = None
+        self._row_scope_table = None
+
+    def find_cell_in_row(self, header_text: str):
+        """Return the <td> at the column matching header_text, within the
+        currently active row scope. Returns None if no row is scoped or the
+        column can't be located."""
+        if self._row_scope is None:
+            return None
+        col_idx = self.find_table_column_index(header_text, table_el=self._row_scope_table)
+        if col_idx is None:
+            return None
+        try:
+            cells = self._row_scope.find_elements(By.TAG_NAME, "td")
+            if 0 <= col_idx < len(cells):
+                return cells[col_idx]
+        except Exception:
+            pass
+        return None
+
+    def is_ambiguous_grid_column(self, header_text: str) -> bool:
+        """True if header_text matches a table column that has more than
+        one data row — meaning a plain Text:/upload: reference (with no
+        active Row: scope) would be genuinely ambiguous rather than safely
+        resolvable, e.g. a 'New Reading' input repeated once per meter row.
+        Only fires for this specific table-column shape; ordinary form
+        fields (no <th> counterpart) are entirely unaffected."""
+        ident_l = header_text.lower().strip()
+        try:
+            tables = self.driver.find_elements(By.TAG_NAME, "table")
+        except Exception:
+            return False
+        for table in tables:
+            try:
+                if not table.is_displayed():
+                    continue
+                headers = table.find_elements(By.XPATH, ".//th")
+                matched = any(
+                    h.is_displayed() and (
+                        (h.text or "").strip().lower() == ident_l
+                        or ident_l in (h.text or "").strip().lower()
+                    )
+                    for h in headers
+                )
+                if not matched:
+                    continue
+                data_rows = table.find_elements(By.XPATH, ".//tbody/tr") or \
+                            table.find_elements(By.XPATH, ".//tr")
+                visible_rows = [r for r in data_rows if r.is_displayed()]
+                if len(visible_rows) > 1:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def find_input(self, identifier: str) -> object | None:
         """
@@ -2136,6 +2260,22 @@ def automate_from_config(config_path) -> tuple:
             except Exception as e:
                 judgment = make_fail("Login", "N/A", "ERROR", str(e))
 
+        # ── ROW (grid/table scoping for repeated-label fields) ─────────────────
+        elif norm.startswith("row:"):
+            row_ident = action.split(":", 1)[1].strip().strip('"')
+            if row_ident.lower() in ("end", "clear", "none"):
+                finder.clear_row_scope()
+                judgment = make_pass("Row", row_ident, "Cleared",
+                                     "Row scope cleared — subsequent fields search the whole page again.")
+            else:
+                if finder.set_row_scope(row_ident):
+                    judgment = make_pass("Row", row_ident, f"Scoped to row '{row_ident}'",
+                                         f"Row '{row_ident}' found — subsequent Text:/upload: "
+                                         "commands will resolve within this row.")
+                else:
+                    judgment = make_fail("Row", row_ident, "NOT FOUND",
+                                        f"No table row found matching '{row_ident}'.")
+
         # ── TEXT ──────────────────────────────────────────────────────────────
         elif norm.startswith("text:"):
             try:
@@ -2144,8 +2284,40 @@ def automate_from_config(config_path) -> tuple:
                 field = field.strip()
                 value = value.strip().strip('"')
 
-                inp = finder.find_input(field)
-                if inp:
+                grid_error = None  # set instead of judgment, so the normal
+                                    # success/fail logic below never overwrites
+                                    # a row-scope/ambiguity-specific message
+
+                if finder._row_scope is not None:
+                    # Grid-scoped: resolve within the active row only.
+                    cell = finder.find_cell_in_row(field)
+                    inp  = None
+                    if cell is not None:
+                        try:
+                            inp = cell.find_element(By.XPATH, ".//input | .//textarea")
+                        except Exception:
+                            inp = None
+                    if inp is None:
+                        grid_error = (
+                            f"Column '{field}' not found within the active row scope — "
+                            "check the column header text and that Row: matched the right row."
+                        )
+                elif finder.is_ambiguous_grid_column(field):
+                    # Not row-scoped, but this label matches a repeated
+                    # table column across multiple rows — refuse rather
+                    # than silently guessing which row was meant.
+                    inp = None
+                    grid_error = (
+                        f"'{field}' matches a column with multiple rows — use "
+                        f"'Row: <row identifier>' before this Text: command to "
+                        "specify which row."
+                    )
+                else:
+                    inp = finder.find_input(field)
+
+                if grid_error:
+                    judgment = make_fail("Text", value, "NOT FOUND", grid_error)
+                elif inp:
                     finder.scroll_to(inp)
                     finder.safe_type(inp, value)
                     time.sleep(0.8)
@@ -2368,9 +2540,51 @@ def automate_from_config(config_path) -> tuple:
                 field     = args[0].strip()
                 file_path = args[1].strip().strip('"')
 
-                ok = finder.fill_file_upload(field, file_path)
+                grid_error = None
+                ok = False
+
+                if finder._row_scope is not None:
+                    cell = finder.find_cell_in_row(field)
+                    file_input = None
+                    if cell is not None:
+                        try:
+                            file_input = cell.find_element(By.XPATH, ".//input[@type='file']")
+                        except Exception:
+                            file_input = None
+                    if file_input is None:
+                        grid_error = (
+                            f"Column '{field}' not found within the active row scope, "
+                            "or it has no file input — check the column header text "
+                            "and that Row: matched the right row."
+                        )
+                    else:
+                        abs_path = str(Path(file_path).expanduser().resolve())
+                        if not Path(abs_path).exists():
+                            docs_path = Path.home() / "Documents" / file_path
+                            if docs_path.exists():
+                                abs_path = str(docs_path)
+                            else:
+                                grid_error = f"File not found: {file_path}"
+                        if not grid_error:
+                            try:
+                                finder.scroll_to(file_input)
+                                file_input.send_keys(abs_path)
+                                ok = True
+                            except Exception as e:
+                                grid_error = f"Could not set file on grid upload field: {e}"
+                elif finder.is_ambiguous_grid_column(field):
+                    grid_error = (
+                        f"'{field}' matches a column with multiple rows — use "
+                        f"'Row: <row identifier>' before this upload: command to "
+                        "specify which row."
+                    )
+                else:
+                    ok = finder.fill_file_upload(field, file_path)
+
                 time.sleep(1.0)
-                if ok:
+                if grid_error:
+                    judgment = make_fail("Upload", file_path, "NOT FOUND", grid_error)
+                elif ok:
                     judgment = vision.judge_step("upload", field, file_path, driver, execution_ok=True)
                 else:
                     judgment = make_fail("Upload", file_path, "NOT FOUND",
