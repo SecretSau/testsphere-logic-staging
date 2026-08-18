@@ -1,8 +1,8 @@
 {
   "version": "1.2.0-dev",
-  "release_date": "2026-08-13",
+  "release_date": "2026-08-19",
   "min_app_version": "1.0.0",
-  "changelog": "STAGING — under development, not yet verified for production",
+  "changelog": "STAGING — Row:/grid scoping for repeated-label table fields (GridText-equivalent via Row: + Text:/upload:)",
   "files": {
     "logic": {
       "sha256": "043da7b4e59bd2f2358ef6b05d82ef6ad3a6ab0c02e16e76a3f43b597cc8e76c",
