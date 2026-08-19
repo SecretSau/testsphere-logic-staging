@@ -186,10 +186,34 @@ class ElementFinder:
         return False
 
     def safe_type(self, element, value: str) -> bool:
-        """Type into an element with JS fallback."""
+        """
+        Clear any existing value, then type into an element (with JS
+        fallback). Clearing uses two layered strategies:
+        1. .clear() — cheap, works for most plain <input>/<textarea>.
+        2. Select-all + Delete via real keyboard events — a defensive
+           supplement for React/Vue-controlled fields where .clear() can
+           leave the framework's internal state out of sync (the DOM looks
+           empty, but the framework doesn't know the value changed, so the
+           new text can end up merged with the old), and for
+           contenteditable elements .clear() doesn't work on at all.
+        This is what makes Text: safe to use for editing an existing
+        value, not just filling a blank field — the old value is actively
+        removed first rather than assuming send_keys() will overwrite it
+        (send_keys appends, it does not replace, unless the field is
+        already empty).
+        """
         self.scroll_to(element)
         try:
             element.clear()
+        except Exception:
+            pass
+        try:
+            element.click()
+            element.send_keys(Keys.CONTROL, "a")
+            element.send_keys(Keys.DELETE)
+        except Exception:
+            pass
+        try:
             element.send_keys(value)
             return True
         except ElementNotInteractableException:
