@@ -2,10 +2,10 @@
   "version": "1.2.0-dev",
   "release_date": "2026-08-19",
   "min_app_version": "1.0.0",
-  "changelog": "STAGING — Row:/grid scoping for repeated-label table fields (GridText-equivalent via Row: + Text:/upload:)",
+  "changelog": "- Added new features to the logic module for enhanced data processing.",
   "files": {
     "logic": {
-      "sha256": "043da7b4e59bd2f2358ef6b05d82ef6ad3a6ab0c02e16e76a3f43b597cc8e76c",
+      "sha256": "32d2ad3aed540a9fade5e5d71470e0a40ef25d6a513c3919088e594a534951b0",
       "download_url": "https://raw.githubusercontent.com/SecretSau/testsphere-logic-staging/main/logic.py"
     },
     "vision": {

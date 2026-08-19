@@ -685,6 +685,31 @@ class ElementFinder:
                 continue
         return False
 
+    def wait_until_found(self, find_fn, timeout: float = 8.0, poll_interval: float = 0.4):
+        """
+        Repeatedly calls find_fn() (a zero-arg callable wrapping any
+        existing find_* method) until it returns a truthy result or
+        `timeout` seconds elapse, sleeping poll_interval between attempts.
+
+        This is what removes the need for a manual `sleep:` before most
+        steps: if the page/AJAX content hasn't finished loading yet, this
+        just keeps checking until it has, instead of failing on the very
+        first attempt. On an already-loaded page this costs nothing extra —
+        it succeeds on the first check exactly as before.
+        """
+        deadline = time.time() + timeout
+        result = None
+        while True:
+            try:
+                result = find_fn()
+            except Exception:
+                result = None
+            if result:
+                return result
+            if time.time() >= deadline:
+                return result
+            time.sleep(poll_interval)
+
     def find_input(self, identifier: str) -> object | None:
         """
         Find an input / textarea matching identifier.
@@ -1371,6 +1396,14 @@ class ElementFinder:
                             "./following-sibling::*[contains(@class,'select')][1]",
                             "./following-sibling::*[contains(@class,'dropdown')][1]",
                             "./following-sibling::div[1]",
+                            # Styled-components dropdowns commonly use a
+                            # plain <input> as the visible trigger (often
+                            # readonly, with an expand-icon sibling) instead
+                            # of a <div> — no id/for link, no role, no
+                            # class hint. Only reachable via label-sibling
+                            # position, which the div-only check above
+                            # misses entirely for this shape.
+                            "./following-sibling::input[1]",
                             "./parent::*//*[@role='combobox'][1]",
                             "./parent::*//*[contains(@class,'select')][1]",
                             "./parent::div/following-sibling::div//*[@role='combobox'][1]",
@@ -2246,8 +2279,10 @@ def automate_from_config(config_path) -> tuple:
                 field, value = args
 
                 # Use smart login field finder — tries identifier + common
-                # email/username/password variations automatically
-                inp = finder.find_login_field(field)
+                # email/username/password variations automatically.
+                # Wrapped in wait_until_found so a slow-loading login page
+                # doesn't need a manual sleep: before this step.
+                inp = finder.wait_until_found(lambda: finder.find_login_field(field))
                 if inp:
                     finder.scroll_to(inp)
                     ok = finder.safe_type(inp, value)
@@ -2313,7 +2348,7 @@ def automate_from_config(config_path) -> tuple:
                         "specify which row."
                     )
                 else:
-                    inp = finder.find_input(field)
+                    inp = finder.wait_until_found(lambda: finder.find_input(field))
 
                 if grid_error:
                     judgment = make_fail("Text", value, "NOT FOUND", grid_error)
@@ -2348,7 +2383,7 @@ def automate_from_config(config_path) -> tuple:
         # ── CLICK ─────────────────────────────────────────────────────────────
         elif norm.startswith("click:"):
             label = action.split(":", 1)[1].strip().strip('"')
-            el    = finder.find_clickable(label)
+            el    = finder.wait_until_found(lambda: finder.find_clickable(label))
             if el:
                 ok = finder.safe_click(el)
                 time.sleep(0.8)
@@ -2363,7 +2398,7 @@ def automate_from_config(config_path) -> tuple:
         # ── BUTTON (alias for click with button-specific scoring) ─────────────
         elif norm.startswith("button:"):
             label = action.split(":", 1)[1].strip().strip('"')
-            el    = finder.find_clickable(label)
+            el    = finder.wait_until_found(lambda: finder.find_clickable(label))
             if el:
                 ok = finder.safe_click(el)
                 time.sleep(0.8)
