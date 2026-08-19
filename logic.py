@@ -2133,8 +2133,20 @@ class ElementFinder:
         Find and interact with an icon/toggle.
         - Icons: just click
         - Toggles: check current state, flip if needed (or force ON/OFF)
+
+        Polls for up to 8s for the icon to appear before giving up — e.g.
+        after a login submit that's still processing/redirecting when this
+        step runs. find_icon() returns a (element, kind) tuple, which is
+        always truthy even when element is None, so this can't reuse the
+        generic wait_until_found() as-is; it needs to check el itself.
+        The click only happens once the find has actually succeeded, so a
+        slow page can never result in a double-click.
         """
+        deadline = time.time() + 8.0
         el, kind = self.find_icon(description, context, state)
+        while not el and time.time() < deadline:
+            time.sleep(0.4)
+            el, kind = self.find_icon(description, context, state)
 
         if not el:
             print(f"[Icon] Could not find: '{description}'"
