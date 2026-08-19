@@ -2194,6 +2194,59 @@ class ElementFinder:
         return best_el, best_score
 
 
+def _get_chromedriver_path(force_fresh: bool = False) -> str:
+    """
+    Resolve the chromedriver path, using a local cache to avoid
+    ChromeDriverManager().install()'s network-dependent version-check
+    running on every single execution — that check (verifying/downloading
+    the matching driver for the installed Chrome version) is what causes
+    TestSphere to appear frozen for 1-4 minutes before the browser opens,
+    with zero progress shown since it blocks the calling thread.
+
+    Only re-resolves (the slow path) when there's no cache yet, the cached
+    binary no longer exists on disk, the cache has aged past
+    CACHE_VALID_DAYS, or force_fresh=True (used to self-heal after a
+    version-mismatch launch failure).
+    """
+    import json
+    from datetime import datetime, timedelta
+
+    CACHE_VALID_DAYS = 7
+
+    cache_dir  = Path(os.path.expandvars(r"%LOCALAPPDATA%")) / "TestSphere"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / "chromedriver_cache.json"
+
+    if not force_fresh and cache_file.exists():
+        try:
+            with open(cache_file, "r") as f:
+                data = json.load(f)
+            cached_path = data.get("path", "")
+            cached_at   = datetime.fromisoformat(data.get("cached_at", ""))
+            if (
+                cached_path
+                and Path(cached_path).exists()
+                and datetime.now() - cached_at < timedelta(days=CACHE_VALID_DAYS)
+            ):
+                print(f"[Driver] Using cached chromedriver: {cached_path}")
+                return cached_path
+        except Exception as e:
+            print(f"[Driver] Cache read failed, resolving fresh: {e}")
+
+    print("[Driver] Resolving chromedriver "
+          f"({'forced refresh' if force_fresh else 'first run or cache expired'})…")
+    from webdriver_manager.chrome import ChromeDriverManager
+    path = ChromeDriverManager().install()
+
+    try:
+        with open(cache_file, "w") as f:
+            json.dump({"path": path, "cached_at": datetime.now().isoformat()}, f)
+    except Exception as e:
+        print(f"[Driver] Could not save chromedriver cache: {e}")
+
+    return path
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  MAIN AUTOMATION ENGINE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2231,10 +2284,21 @@ def automate_from_config(config_path) -> tuple:
     opts.add_argument(f"--user-data-dir={tempfile.mkdtemp()}")
 
     from selenium.webdriver.chrome.service import Service as ChromeService
-    from webdriver_manager.chrome import ChromeDriverManager
-    driver = webdriver.Chrome(
-        service=ChromeService(ChromeDriverManager().install()), options=opts
-    )
+    from selenium.common.exceptions import SessionNotCreatedException
+
+    try:
+        driver = webdriver.Chrome(
+            service=ChromeService(_get_chromedriver_path()), options=opts
+        )
+    except SessionNotCreatedException as e:
+        # Almost always a version mismatch — Chrome auto-updated since the
+        # cache was written. Self-heal: force a fresh resolve and retry
+        # once, rather than requiring the user to manually clear a cache
+        # file they don't know exists.
+        print(f"[Driver] Cached driver failed ({e}); re-resolving fresh…")
+        driver = webdriver.Chrome(
+            service=ChromeService(_get_chromedriver_path(force_fresh=True)), options=opts
+        )
 
     driver.get(website_link)
     WebDriverWait(driver, 15).until(
@@ -2338,10 +2402,10 @@ def automate_from_config(config_path) -> tuple:
         # ── TEXT ──────────────────────────────────────────────────────────────
         elif norm.startswith("text:"):
             try:
-                raw   = action.split(":", 1)[1]
-                field, value = raw.split(",", 1)
-                field = field.strip()
-                value = value.strip().strip('"')
+                args = parse_args(action.split(":", 1)[1])
+                if len(args) != 2:
+                    raise ValueError()
+                field, value = args
 
                 grid_error = None  # set instead of judgment, so the normal
                                     # success/fail logic below never overwrites
