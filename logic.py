@@ -2301,9 +2301,64 @@ def automate_from_config(config_path) -> tuple:
         )
 
     driver.get(website_link)
-    WebDriverWait(driver, 15).until(
-        EC.presence_of_element_located((By.TAG_NAME, "body"))
-    )
+
+    # Wait for the page to actually be ready — not just navigated to.
+    # Checks document.readyState AND that the body has rendered content,
+    # since SPAs often report readyState='complete' the instant the empty
+    # HTML shell loads, well before the real app has mounted anything.
+    # 5 minutes (not the old fixed 15s) to tolerate genuinely slow sites/
+    # networks; a page that still hasn't shown anything after that is
+    # failed cleanly rather than left to crash with an uncaught exception.
+    PAGE_LOAD_TIMEOUT_SECONDS = 300
+    try:
+        WebDriverWait(driver, PAGE_LOAD_TIMEOUT_SECONDS).until(
+            lambda d: d.execute_script(
+                "return document.readyState === 'complete' && "
+                "!!document.body && document.body.children.length > 0;"
+            )
+        )
+    except TimeoutException:
+        try:
+            shot = (
+                vision._capture_screenshot(driver, "page_load_timeout")
+                if hasattr(vision, "_capture_screenshot") else None
+            )
+        except Exception:
+            shot = None
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        reason = (
+            f"Website did not finish loading within "
+            f"{PAGE_LOAD_TIMEOUT_SECONDS // 60} minutes — considered a failed execution."
+        )
+        fail_step = {
+            "action": "Link", "expected": website_link,
+            "actual": "Page did not finish loading", "result": "FAIL",
+            "reason": reason, "confidence": 0.0, "screenshot": shot,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "step": 0,
+        }
+        overall = {"status": "FAIL", "reason": reason, "total_steps": total_steps}
+        return [fail_step], overall, shot
+    except Exception as e:
+        # Any other navigation failure (DNS, connection refused, etc.) —
+        # same clean-failure treatment rather than an uncaught crash.
+        try:
+            driver.quit()
+        except Exception:
+            pass
+        reason = f"Could not load '{website_link}': {e}"
+        fail_step = {
+            "action": "Link", "expected": website_link,
+            "actual": "Navigation failed", "result": "FAIL",
+            "reason": reason, "confidence": 0.0, "screenshot": None,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "step": 0,
+        }
+        overall = {"status": "FAIL", "reason": reason, "total_steps": total_steps}
+        return [fail_step], overall, None
 
     finder          = ElementFinder(driver)
     executed_results = []
