@@ -1279,6 +1279,12 @@ class ElementFinder:
     def _get_displayed_month_year(self):
         """Read the month/year header from an open datepicker."""
         header_xpaths = [
+            # jQuery UI splits month/year into separate spans
+            # (ui-datepicker-month / ui-datepicker-year) inside this title
+            # container — check it first so the combined "August 2026" text
+            # is read from here, not from the month-only span alone (which
+            # has no year and would otherwise fail to parse).
+            "//*[contains(@class,'ui-datepicker-title')]",
             "//*[contains(@class,'datepicker-switch') or "
             "contains(@class,'month') or contains(@class,'calendar-caption') "
             "or contains(@class,'picker__month')]",
