@@ -1067,14 +1067,23 @@ class ElementFinder:
                         except Exception:
                             pass
                     if not cb:
+                        # Two sequential attempts, not one unioned XPath —
+                        # a union returns results in document order, not
+                        # priority order. On a list with several wrapping
+                        # labels (e.g. a checklist), the "preceding
+                        # checkbox" fallback pattern could win over the
+                        # correct "checkbox wrapped inside this exact
+                        # label" pattern whenever an earlier item exists in
+                        # the list, silently checking the wrong item.
                         try:
-                            cb = lbl.find_element(
-                                By.XPATH,
-                                ".//input[@type='checkbox'] | "
-                                ".//preceding::input[@type='checkbox'][1]"
-                            )
+                            cb = lbl.find_element(By.XPATH, ".//input[@type='checkbox']")
                         except Exception:
-                            pass
+                            try:
+                                cb = lbl.find_element(
+                                    By.XPATH, ".//preceding::input[@type='checkbox'][1]"
+                                )
+                            except Exception:
+                                pass
                     if cb:
                         matches.append(("checkbox", cb, lbl))
             except Exception:
