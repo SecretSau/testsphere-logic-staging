@@ -819,13 +819,37 @@ class ElementFinder:
                                 pass
 
                         # 1c. Following input in document order (broader fallback)
+                        # Guarded: reject a candidate if a DIFFERENT label
+                        # sits between this label and the candidate — a
+                        # strong signal the candidate actually belongs to
+                        # another field. Without this guard, a Location
+                        # field that's momentarily not yet displayed (e.g.
+                        # still initializing a JS widget like jQuery UI
+                        # Autocomplete) gets skipped, and this strategy
+                        # jumps past intervening <select>-based fields
+                        # (which don't count as input/textarea at all) to
+                        # wrongly grab a textarea several fields later.
                         try:
                             for el in lbl.find_elements(
                                 By.XPATH,
                                 "./following::input[position()<=3] | "
                                 "./following::textarea[position()<=3]"
                             ):
-                                if el.is_displayed():
+                                if not el.is_displayed():
+                                    continue
+                                try:
+                                    has_intervening_label = self.driver.execute_script(
+                                        "var a = arguments[0], b = arguments[1];"
+                                        "var range = document.createRange();"
+                                        "range.setStartAfter(a);"
+                                        "range.setEndBefore(b);"
+                                        "var frag = range.cloneContents();"
+                                        "return frag.querySelector('label') !== null;",
+                                        lbl, el
+                                    )
+                                except Exception:
+                                    has_intervening_label = False
+                                if not has_intervening_label:
                                     return el
                         except Exception:
                             pass
@@ -1363,7 +1387,28 @@ class ElementFinder:
         option_l = option_text.lower().strip()
 
         # ── Step 1: Native <select> ───────────────────────────────────────────
-        sel_el = self.find_select(identifier)
+        # Poll for up to 8s if the select is found but only has an empty/
+        # placeholder option — a cascading dropdown (e.g. Service Provider
+        # depending on a Category selected earlier) whose real options
+        # populate via AJAX after another field changes, not instantly.
+        # Safe to retry: no click-to-open is involved, so nothing here can
+        # cause a double-action the way retrying a custom dropdown trigger
+        # could.
+        deadline = time.time() + 8.0
+        sel_el = None
+        while True:
+            sel_el = self.find_select(identifier)
+            if sel_el:
+                try:
+                    real_opts = [o.text.strip() for o in Select(sel_el).options if o.text.strip()]
+                except Exception:
+                    real_opts = []
+                if real_opts:
+                    break
+            if time.time() >= deadline:
+                break
+            time.sleep(0.4)
+
         native_fail_reason = None
         if sel_el:
             try:
